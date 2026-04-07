@@ -1,62 +1,66 @@
 # Multi-Agent Productivity Assistant
 
-ADK-based submission scaffold for the `Multi-Agent Productivity Assistant` hackathon challenge.
+An API-first productivity assistant that converts a natural-language goal into a structured workflow with tasks, notes, and a calendar block.
 
-This version is aligned to the Google stack named across the academy tracks:
+This project is built around the Google stack from the hackathon prompt:
 
-- `Gemini` as the model
+- `Gemini` for reasoning
 - `Google ADK` for multi-agent orchestration
-- `MCP` via `McpToolset`
-- `AlloyDB` as the structured database
-- `Cloud Run` as the deployment target
-- `ADK API Server` as the API layer
+- `MCP` through `McpToolset` and Toolbox
+- `AlloyDB` for persistence
+- `Cloud Run` for deployment
 
-## What Is In This Repo
+## What It Does
 
-- `productivity_agent/agent.py`
-  An ADK `SequentialAgent` that coordinates four sub-agents.
-- `productivity_agent/demo_api.py`
-  A thin demo-facing FastAPI wrapper that returns clean JSON instead of raw ADK event payloads.
-- `toolbox/tools.yaml`
-  MCP Toolbox configuration that exposes task, notes, calendar, and workflow tools backed by AlloyDB.
-- `db/schema.sql`
-  Postgres-compatible schema for workflow runs, tasks, notes, and calendar events.
-- `Dockerfile`
-  Cloud Run container that installs ADK and the Toolbox binary.
-- `.env.example`
-  Environment variables you need to supply.
+For a prompt like:
 
-## Submission Assets
+> Prepare my final hackathon submission for tomorrow at 5 PM, create tasks, save a planning note, and schedule a review block.
 
-Ready-to-use hackathon material is included in:
+the system:
 
-- [`docs/submission-summary.md`](/home/devin/Multi-Agent-Productivity-Assistant/docs/submission-summary.md)
-- [`docs/demo-script.md`](/home/devin/Multi-Agent-Productivity-Assistant/docs/demo-script.md)
-- [`docs/architecture.md`](/home/devin/Multi-Agent-Productivity-Assistant/docs/architecture.md)
-- [`docs/hackathon-checklist.md`](/home/devin/Multi-Agent-Productivity-Assistant/docs/hackathon-checklist.md)
-- [`docs/ppt-slides.md`](/home/devin/Multi-Agent-Productivity-Assistant/docs/ppt-slides.md)
-- [`docs/submission-form-template.md`](/home/devin/Multi-Agent-Productivity-Assistant/docs/submission-form-template.md)
+- retrieves recent workflow context
+- creates a structured execution plan
+- stores a workflow record
+- creates prioritized tasks
+- saves a planning note
+- creates a calendar event when a deadline is present
+- returns a clean JSON response
 
-## Agent Design
+## Architecture
 
-The root agent is a `SequentialAgent`, which satisfies the hackathon requirement for a primary agent coordinating sub-agents.
-
-Sub-agents:
+The root agent is a `SequentialAgent` with four focused sub-agents:
 
 1. `ContextRetriever`
-   Reads recent workflows, tasks, notes, and events from AlloyDB through MCP tools.
+   Reads recent workflows, tasks, notes, and events through MCP tools.
 2. `WorkflowPlanner`
-   Uses Gemini to turn the user request into a structured workflow plan.
+   Turns the user request into a structured plan.
 3. `WorkflowExecutor`
-   Uses MCP tools to store the workflow run, create tasks, write a note, and optionally add a calendar event.
+   Persists the workflow, tasks, notes, and calendar event.
 4. `WorkflowReporter`
-   Produces the final plain-language response for the API caller.
+   Finalizes the workflow and returns the final answer.
 
-## Tooling Through MCP
+High-level flow:
 
-The agent does not talk to SQLite or local mock tools anymore.
+`User Prompt -> Cloud Run API -> ADK Agents -> MCP Toolbox -> AlloyDB -> Final Response`
 
-Instead, it connects to MCP Toolbox and uses these AlloyDB-backed MCP tools:
+Additional architecture notes are in [architecture.md](/home/devin/Multi-Agent-Productivity-Assistant/docs/architecture.md).
+
+## Repository Layout
+
+- `productivity_agent/agent.py`
+  ADK multi-agent workflow definition.
+- `productivity_agent/demo_api.py`
+  FastAPI wrapper that exposes a clean demo endpoint.
+- `toolbox/tools.yaml`
+  MCP tool definitions backed by AlloyDB.
+- `db/schema.sql`
+  Database schema for workflows, tasks, notes, and calendar events.
+- `tests/test_scaffold.py`
+  Lightweight validation tests for repo structure and syntax.
+
+## MCP Tools
+
+The agent uses these AlloyDB-backed tools:
 
 - `workflow_list_recent_runs`
 - `workflow_store_run`
@@ -71,7 +75,7 @@ Instead, it connects to MCP Toolbox and uses these AlloyDB-backed MCP tools:
 
 ## Local Setup
 
-### 1. Create and activate a virtual environment
+1. Create a virtual environment and install dependencies:
 
 ```bash
 python3 -m venv .venv
@@ -79,38 +83,21 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Create your environment file
+2. Create your local environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in the AlloyDB and Gemini values in `.env`.
+3. Apply `db/schema.sql` to your AlloyDB database.
 
-For public repository safety:
-
-- keep `.env` private
-- keep `cloudrun-env.yaml` private
-- keep `toolbox/tools.cloudrun.yaml` private
-- use the example files committed in the repo instead:
-  - [`cloudrun-env.example.yaml`](/home/devin/Multi-Agent-Productivity-Assistant/cloudrun-env.example.yaml)
-  - [`toolbox/tools.cloudrun.example.yaml`](/home/devin/Multi-Agent-Productivity-Assistant/toolbox/tools.cloudrun.example.yaml)
-
-### 3. Apply the schema to AlloyDB
-
-Run the SQL in `db/schema.sql` against your AlloyDB database before starting the agent.
-
-### 4. Start the demo API server
-
-Run this from the repository root:
+4. Start the demo API:
 
 ```bash
 uvicorn productivity_agent.demo_api:app --reload
 ```
 
-By default the demo API serves on `http://localhost:8000`.
-
-Clean demo endpoint:
+5. Send a request:
 
 ```bash
 curl -X POST "http://localhost:8000/demo/run" \
@@ -120,30 +107,25 @@ curl -X POST "http://localhost:8000/demo/run" \
   }'
 ```
 
-This endpoint returns a small response with:
+## Demo API
 
-- the final plain-language answer
-- the final agent name
-- the agents involved
-- the MCP tools called
-- the session id
+Main endpoint:
 
-## How The Runtime Works
+- `POST /demo/run`
 
-`productivity_agent/agent.py` uses `McpToolset` with a synchronous stdio connection, which is the ADK deployment-safe pattern for MCP agents.
+Response includes:
 
-Local development:
+- final answer
+- final agent name
+- agents involved
+- tool calls made
+- session id
 
-- install the `toolbox` binary and keep `TOOLBOX_COMMAND=toolbox`, or
-- set `TOOLBOX_COMMAND=npx` and let ADK start `@toolbox-sdk/server`
+## Cloud Run Deployment
 
-The Dockerfile uses the production-style Toolbox binary so the Cloud Run container does not depend on `npx`.
+This repo is containerized for Cloud Run.
 
-## Cloud Run
-
-The container is built to run the clean demo API in Cloud Run.
-
-Typical deployment flow:
+Typical deploy shape:
 
 ```bash
 gcloud run deploy productivity-assistant \
@@ -152,21 +134,25 @@ gcloud run deploy productivity-assistant \
   --set-env-vars GOOGLE_API_KEY=...,GOOGLE_CLOUD_PROJECT=...,ALLOYDB_REGION=...,ALLOYDB_CLUSTER=...,ALLOYDB_INSTANCE=...,ALLOYDB_DATABASE=...
 ```
 
-If you use password auth for AlloyDB, also provide `ALLOYDB_USER` and `ALLOYDB_PASSWORD`.
+If your AlloyDB setup uses password auth, also set:
+
+- `ALLOYDB_USER`
+- `ALLOYDB_PASSWORD`
+
+For public repository safety, keep real env files private and use the committed examples:
+
+- [cloudrun-env.example.yaml](/home/devin/Multi-Agent-Productivity-Assistant/cloudrun-env.example.yaml)
+- [tools.cloudrun.example.yaml](/home/devin/Multi-Agent-Productivity-Assistant/toolbox/tools.cloudrun.example.yaml)
 
 ## Verification
-
-This repository includes scaffold checks rather than live integration tests because Gemini, AlloyDB, and MCP Toolbox require real external credentials and services.
-
-Run:
 
 ```bash
 python3 -m unittest discover -s tests -v
 python3 -m compileall productivity_agent tests
 ```
 
-## Important Notes
+## Notes
 
-- This project now targets the Google services named in the challenge instead of local substitutes.
-- It is a scaffold for the real service, so you still need valid Gemini and AlloyDB credentials to run it end to end.
-- The MCP tools in `toolbox/tools.yaml` are the persistence boundary for tasks, notes, workflow history, and calendar events.
+- Live Gemini, AlloyDB, and MCP integrations require real credentials and quota.
+- The public repo intentionally excludes private deployment files and secrets.
+- This repo is structured as a working prototype that can be extended into a richer productivity platform.
