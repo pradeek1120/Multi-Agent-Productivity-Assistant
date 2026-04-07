@@ -1,0 +1,223 @@
+kind: sources
+name: productivity-alloydb
+type: alloydb-postgres
+project: churn-prediction-ai-492110
+region: us-east4
+cluster: multiagent
+instance: multiagent-primary
+database: multiagentdb
+user: postgres
+password: YOUR_POSTGRES_PASSWORD
+ipType: private
+---
+kind: tools
+name: workflow_list_recent_runs
+type: postgres-sql
+source: productivity-alloydb
+description: List the most recent workflow runs to give the planner context about recent activity.
+statement: |
+  SELECT id, title, objective, status, summary, created_at
+  FROM workflow_runs
+  ORDER BY created_at DESC
+  LIMIT 5;
+---
+kind: tools
+name: workflow_store_run
+type: postgres-sql
+source: productivity-alloydb
+description: Create a workflow run before creating related tasks, notes, or calendar events. Call this first and reuse the returned id.
+parameters:
+  - name: user_prompt
+    type: string
+    description: The original user request or objective in natural language.
+  - name: title
+    type: string
+    description: Short title for the workflow.
+  - name: objective
+    type: string
+    description: Concise objective for the workflow.
+  - name: status
+    type: string
+    description: Initial workflow status, usually running.
+  - name: summary
+    type: string
+    description: Initial summary text. Use an empty string if not available yet.
+    required: false
+    default: ""
+  - name: plan_json
+    type: string
+    description: Full workflow plan JSON as a string.
+statement: |
+  INSERT INTO workflow_runs (user_prompt, title, objective, status, summary, plan_json)
+  VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6::jsonb)
+  RETURNING id, title, objective, status, summary, created_at;
+---
+kind: tools
+name: workflow_mark_completed
+type: postgres-sql
+source: productivity-alloydb
+description: Update a workflow run after its tasks, notes, and calendar event have been created.
+parameters:
+  - name: workflow_id
+    type: integer
+    description: The workflow id returned by workflow_store_run.
+  - name: status
+    type: string
+    description: Final workflow status, usually completed.
+  - name: summary
+    type: string
+    description: Concise summary of what was created.
+statement: |
+  UPDATE workflow_runs
+  SET status = $2,
+      summary = $3,
+      updated_at = NOW()
+  WHERE id = $1
+  RETURNING id, status, summary, updated_at;
+---
+kind: tools
+name: workflow_finalize_latest_run
+type: postgres-sql
+source: productivity-alloydb
+description: Finalize the most recently created workflow run with a completed status and summary. Use this in the final reporting step.
+parameters:
+  - name: summary
+    type: string
+    description: Concise summary of what was created for the latest workflow run.
+statement: |
+  UPDATE workflow_runs
+  SET status = 'completed',
+      summary = $1,
+      updated_at = NOW()
+  WHERE id = (
+    SELECT id
+    FROM workflow_runs
+    ORDER BY created_at DESC
+    LIMIT 1
+  )
+  RETURNING id, status, summary, updated_at;
+---
+kind: tools
+name: task_manager_list_pending_tasks
+type: postgres-sql
+source: productivity-alloydb
+description: List pending or in-progress tasks so the planner can avoid duplicating work.
+statement: |
+  SELECT id, workflow_id, title, priority, status, sequence, due_at, created_at
+  FROM tasks
+  WHERE status IN ('pending', 'in_progress')
+  ORDER BY created_at DESC
+  LIMIT 10;
+---
+kind: tools
+name: task_manager_create_task
+type: postgres-sql
+source: productivity-alloydb
+description: Create one task for the current workflow in the task manager.
+parameters:
+  - name: workflow_id
+    type: integer
+    description: Workflow id returned by workflow_store_run.
+  - name: title
+    type: string
+    description: Task title.
+  - name: priority
+    type: string
+    description: Task priority such as high, medium, or low.
+  - name: status
+    type: string
+    description: Task status, usually pending.
+  - name: sequence
+    type: integer
+    description: Ordered step number in the workflow.
+  - name: due_at
+    type: string
+    description: ISO-8601 due date or an empty string when unknown.
+    required: false
+    default: ""
+statement: |
+  INSERT INTO tasks (workflow_id, title, priority, status, sequence, due_at)
+  VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::timestamptz)
+  RETURNING id, workflow_id, title, priority, status, sequence, due_at, created_at;
+---
+kind: tools
+name: notes_list_recent_notes
+type: postgres-sql
+source: productivity-alloydb
+description: List recent notes so the planner can reuse important existing context.
+statement: |
+  SELECT id, workflow_id, title, body, tags, created_at
+  FROM notes
+  ORDER BY created_at DESC
+  LIMIT 5;
+---
+kind: tools
+name: notes_create_note
+type: postgres-sql
+source: productivity-alloydb
+description: Create one note that captures the workflow brief and important constraints.
+parameters:
+  - name: workflow_id
+    type: integer
+    description: Workflow id returned by workflow_store_run.
+  - name: title
+    type: string
+    description: Short note title.
+  - name: body
+    type: string
+    description: Full note content.
+  - name: tags_csv
+    type: string
+    description: Comma-separated tag list.
+    required: false
+    default: ""
+statement: |
+  INSERT INTO notes (workflow_id, title, body, tags)
+  VALUES (
+    $1, $2, $3,
+    CASE
+      WHEN NULLIF($4, '') IS NULL THEN ARRAY[]::text[]
+      ELSE string_to_array($4, ',')
+    END
+  )
+  RETURNING id, workflow_id, title, tags, created_at;
+---
+kind: tools
+name: calendar_list_upcoming_events
+type: postgres-sql
+source: productivity-alloydb
+description: List upcoming calendar events so the planner can avoid scheduling conflicts.
+statement: |
+  SELECT id, workflow_id, title, start_at, end_at, description, created_at
+  FROM calendar_events
+  WHERE end_at >= NOW()
+  ORDER BY start_at ASC
+  LIMIT 10;
+---
+kind: tools
+name: calendar_create_event
+type: postgres-sql
+source: productivity-alloydb
+description: Create one calendar event for the workflow when the plan includes a clear deadline or schedule.
+parameters:
+  - name: workflow_id
+    type: integer
+    description: Workflow id returned by workflow_store_run.
+  - name: title
+    type: string
+    description: Event title.
+  - name: start_at
+    type: string
+    description: ISO-8601 event start timestamp.
+  - name: end_at
+    type: string
+    description: ISO-8601 event end timestamp.
+  - name: description
+    type: string
+    description: Short description.
+    required: false
+    default: ""
+statement: |
+  INSERT INTO calendar_events (workflow_id, title, start_at, end_at, description)
+  VALUES ($1, $2, $3::timestamptz, $4::timestamptz, NULLIF($5, ''))
+  RETURNING id, workflow_id, title, start_at, end_at, description, created_at;
